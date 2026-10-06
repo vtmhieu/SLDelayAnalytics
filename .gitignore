@@ -1,0 +1,16 @@
+# API keys
+.env
+
+# Downloaded / generated data (too large for git)
+data/
+sl.zip
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
