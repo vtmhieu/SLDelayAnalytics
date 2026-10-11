@@ -97,6 +97,15 @@ data/raw/koda/
 └── static/GTFS-SL-<date>.zip        # static GTFS valid on that date
 ```
 
+### 4. Run the decompression script
+
+```bash
+python scripts/decompresser.py
+```
+This will create a new tree of data inside the *data* folder. It has the same structure as *step 3*, but instead
+of *raw*, it is *decompressed*.
+
+
 Notes:
 
 - KoDa builds archives on request, so the first request for a date can take several minutes. The script waits and retries.
