@@ -1,0 +1,11 @@
+# Spark image used by the master, the workers and the Jupyter driver, so every
+# process runs the same Spark and Python versions.
+FROM apache/spark:4.1.3-scala2.13-java17-python3-ubuntu
+
+USER root
+RUN pip install --no-cache-dir jupyterlab pandas pyarrow plotly \
+ && mkdir -p /home/spark && chown spark /home/spark
+# the spark user has no home directory in the base image; Jupyter and Ivy need one
+ENV HOME=/home/spark
+ENV PATH="/opt/spark/bin:${PATH}"
+USER spark

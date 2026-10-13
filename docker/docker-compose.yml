@@ -1,0 +1,80 @@
+# HDFS (1 namenode + 1 datanode) and a Spark standalone cluster (1 master +
+# 2 workers) plus a Jupyter container that acts as the Spark driver.
+# The repository is mounted at /work in every container.
+#
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# UIs: HDFS http://localhost:9870, Spark master http://localhost:8080,
+#      running job http://localhost:4040, Jupyter http://localhost:8888
+
+x-hadoop: &hadoop
+  build: hadoop                  # official Hadoop release on Java 11, native on amd64 and arm64
+  image: sl-hdfs:3.4.1
+
+x-spark: &spark
+  build:
+    context: .
+    dockerfile: Dockerfile.spark
+  image: sl-spark:4.1.3
+  volumes:
+    - ..:/work
+  working_dir: /work
+
+services:
+  namenode:
+    <<: *hadoop
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    ports:
+      - "9870:9870"
+    volumes:
+      - ..:/work
+      - namenode:/hadoop/nn
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+
+  datanode:
+    <<: *hadoop
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    depends_on: [namenode]
+    volumes:
+      - ..:/work
+      - datanode:/hadoop/dn
+    environment:
+      HADOOP_HEAPSIZE_MAX: 512m
+
+  spark-master:
+    <<: *spark
+    hostname: spark-master
+    command: ["spark-class", "org.apache.spark.deploy.master.Master"]
+    ports:
+      - "8080:8080"
+
+  spark-worker-1: &worker
+    <<: *spark
+    command: ["spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
+    depends_on: [spark-master]
+    environment:
+      # sized for Docker Desktop's default 8 GB; raise both if Docker has more memory
+      SPARK_WORKER_CORES: "4"
+      SPARK_WORKER_MEMORY: "2500m"
+
+  spark-worker-2:
+    <<: *worker
+
+  jupyter:
+    <<: *spark
+    hostname: jupyter
+    command: ["jupyter", "lab", "--ip=0.0.0.0", "--no-browser", "--IdentityProvider.token=", "--notebook-dir=/work"]
+    depends_on: [spark-master, namenode]
+    environment:
+      SPARK_MASTER: spark://spark-master:7077
+      SL_DATA: hdfs://namenode:8020/sl
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+
+volumes:
+  namenode:
+  datanode:
