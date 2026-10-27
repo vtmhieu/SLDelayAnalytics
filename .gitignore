@@ -1,6 +1,6 @@
 # API keys
 .env
-
+.claude
 # Downloaded / generated data (too large for git)
 data/
 sl.zip

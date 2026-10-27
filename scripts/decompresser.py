@@ -64,7 +64,7 @@ def main():
     for folder, pattern, open_archive in (
         (STATIC_FOLDER, "*.zip", open_zip),
         (TRIP_UPDATES_FOLDER, "*.7z", open_7z),
-        (SERVICE_ALERTS_FOLDER, "*.7z", open_7z),
+        # (SERVICE_ALERTS_FOLDER, "*.7z", open_7z),
     ):
         for archive in sorted(folder.glob(pattern)):
             if not extract(archive, open_archive):
