@@ -120,6 +120,14 @@ python scripts/spark-preprocessing.py
 This cleans the trip updates in HDFS, joins them with the timetable and writes
 the result back to HDFS as `/sl/stop_events`. See *Preprocessing with Spark* below.
 
+### 7. Run the Spark analytics
+
+```bash
+python scripts/spark-analytics.py
+```
+This answers the project questions from `/sl/stop_events` and writes small
+result tables to HDFS and to `data/analytics/*.csv`. See *Analytics with Spark* below.
+
 Notes:
 
 - KoDa builds archives on request, so the first request for a date can take several minutes. The script waits and retries.
@@ -382,3 +390,45 @@ Spark reads straight from HDFS over `hdfs://localhost:9000`, so the daemons
 have to be running, and nothing is copied back to the local disk. Spark 4 needs
 Java 17 (step 1 of the HDFS setup); on Java 11 it stops with
 `UnsupportedClassVersionError ... class file version 61.0`.
+
+## Analytics with Spark
+
+```bash
+python scripts/spark-analytics.py
+# or on a local copy of the /sl folder, without HDFS
+python scripts/spark-analytics.py --base /path/to/sl
+```
+
+This reads `/sl/stop_events` and writes one small table per question, as
+Parquet to `/sl/analytics/<table>` and as CSV to `data/analytics/<table>.csv`
+for the dashboard. It also prints the main results.
+
+| Table | One row per | Answers |
+|---|---|---|
+| `lines` | line (`route_id`) | which lines have the highest average delay (`rank_avg_delay`) |
+| `stations` | station, with coordinates | which stations are most often late (`rank_late_pct`), which are busiest (`rank_busiest`), the map |
+| `hourly` | `day_type` (`weekday`, `weekend`, `all`) and hour | during which hours delays are worst |
+| `day_types` | transport mode (and `all`) and `day_type` | how weekdays and weekends differ |
+| `histogram` | mode, `day_type` and one-minute delay bin | the delay distribution |
+| `daily` | service day | spotting days that stand out |
+
+Every table has the same measures: `stops`, `avg_delay_s`, `median_delay_s`,
+`p90_delay_s`, `late_stops` and `late_pct` (share of stops 3+ minutes late).
+
+How to read the numbers:
+
+- **Only lines and stations with enough data are ranked**: at least 100 stops
+  per day for a line and 50 for a station. The others are still in the
+  tables, with an empty rank, so the dashboard can show them.
+- **Lines and stations are grouped by id, not name.** `14` is a metro line and
+  a ferry, and `Slussen` is five stations (metro, several bus stops, ferry).
+  The `modes` column says which of them a station is. When a timetable
+  renames or moves a stop, the newest name and position are used.
+- **A stop is a vehicle stopping, not a passenger.** "Busiest station" means
+  the most departures, which favours big bus terminals.
+- **Delays add up along a trip**, so a station's numbers mostly reflect the
+  lines that run through it: in four days of data, seven of the ten
+  most-often-late stations are consecutive stops of buses 835/848/893
+  around Tungelsta.
+- **Night hours have few stops**, so their averages move a lot from day to day.
+  Look at `stops` next to `avg_delay_s` in `hourly`.
