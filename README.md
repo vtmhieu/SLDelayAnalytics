@@ -117,7 +117,8 @@ This script is fetching the relevant files from inside the static folder (and th
 ```bash
 python scripts/spark-preprocessing.py
 ```
-This is reading the tables ingressed inside hdfs and printing them to the cli.
+This cleans the trip updates in HDFS, joins them with the timetable and writes
+the result back to HDFS as `/sl/stop_events`. See *Preprocessing with Spark* below.
 
 Notes:
 
@@ -195,7 +196,9 @@ config works for everyone regardless of username.
 
 ### 3. Put the Hadoop commands on your PATH
 
-Add to your `~/.bashrc` (then `source ~/.bashrc`):
+Add to your `~/.bashrc` (then `source ~/.bashrc`), or to `~/.zshrc` on macOS.
+Everything else in this guide works on macOS unchanged, with Java 17 from
+Homebrew (`brew install openjdk@17`):
 
 ```bash
 export HADOOP_HOME=~/hadoop
@@ -276,9 +279,11 @@ files, only in the folder names. A query such as `where(date == "2026-09-07")`
 then opens one day's folder and skips the rest, instead of reading everything
 and throwing most of it away.
 
-The hours are the ones SL itself used in the feed, which are **UTC**, so hour
-16 is 18:00 in Stockholm in summer time. For questions about the time of day,
-use the scheduled local time from `stop_times`, not this folder name.
+The hours are the ones KoDa used to file the snapshots, which are **Stockholm
+time**, even though the file names end in `Z`: the `hour=03` folder holds
+snapshots from 01:00 to 01:59 UTC. The hour a snapshot was taken is not the
+hour the vehicle ran, though, so for questions about the time of day use
+`hour_of_day` in `stop_events`, which comes from the scheduled time.
 
 ### Why only one snapshot per hour is kept
 
@@ -315,16 +320,63 @@ hdfs dfs -du -h /sl                   # how much each dataset takes
 `/sl/raw/gtfs/` holds the plain GTFS text files of 28 dates, kept as ground
 truth from an earlier upload.
 
-## Loading the data into Spark
+## Preprocessing with Spark
 
 ```bash
 python scripts/spark-preprocessing.py
+# or on a local copy of the /sl folder, without HDFS
+python scripts/spark-preprocessing.py --base /path/to/sl
 ```
 
-This reads the Parquet back out of HDFS into one Spark DataFrame per table
-(`stops`, `routes`, `trips`, `stop_times`, `calendar`, `trip_updates`) and
-prints the row count and first rows of each, so you can see that everything
-loaded. No cleaning and no joins yet, that is the next step of the pipeline.
+This reads the Parquet out of HDFS, cleans it, joins it with the timetable and
+writes one table back, with one row per stop that a vehicle really made:
+
+```
+/sl/stop_events/service_date=2026-09-15/part-*.parquet
+```
+
+What it does, in order:
+
+1. **One row per stop.** The ingestion keeps the newest row per (trip, stop)
+   inside each hour, but a trip that runs for a while shows up in several hour
+   folders, the earlier ones holding predictions. On two days of data half
+   of all (trip, stop) pairs appear in more than one hour. Spark keeps the
+   newest per (`trip_id`, `stop_sequence`, `trip_start_date`). The start date
+   is part of the key because SL reuses trip ids on different days.
+2. **Only what happened.** A stop whose time is still later than the end of
+   the hour it was last seen in never got an actual time (the trip was
+   cancelled, or it runs past the last downloaded day). About 0.4% of rows,
+   dropped.
+3. **One delay per stop.** The departure delay at the first stop of a trip,
+   since vehicles arrive early there and wait (median arrival delay -75 s,
+   departure +23 s), and the arrival delay everywhere else. Rows without any
+   delay (0.2%) and delays outside -15 min to +2 h (feed errors, about 0.04%)
+   are dropped.
+4. **Joined with the timetable of the same day.** `trips`, `routes`, `stops`
+   and `stop_times` are taken from the timetable whose `date` equals the trip's
+   service day. About 0.3% of trips are not in that timetable and are dropped.
+   Each platform is mapped to its `parent_station`, so all platforms of
+   a station count as one.
+5. **Ready for the analysis.** The scheduled time, actual time, Stockholm hour
+   of day, weekday or weekend, and the transport mode are added.
+
+| Column | Meaning |
+|---|---|
+| `service_date` | the day the trip belongs to (partition folder) |
+| `trip_id`, `stop_sequence` | which trip, the how-manieth stop |
+| `route_id`, `route_short_name`, `route_desc`, `route_type`, `transport_mode` | the line, e.g. `14`, `tunnelbanans röda linje`, `401`, `metro` |
+| `direction_id`, `agency_id` | direction of travel, operator |
+| `stop_id`, `stop_name`, `platform_code` | the platform the vehicle stopped at |
+| `station_id`, `station_name`, `station_lat`, `station_lon` | the station that platform belongs to, for the map |
+| `scheduled_time`, `actual_time` | timestamps; `actual_time - scheduled_time = delay_seconds` |
+| `delay_seconds` | seconds late, negative means early |
+| `is_late` | at least 3 minutes late |
+| `hour_of_day` | Stockholm hour of the scheduled time, 0-23 |
+| `day_of_week`, `day_type` | `Monday`..., and `weekday` or `weekend` |
+
+Line names are not unique across transport modes: `14` is both a metro line
+and a Waxholmsbolaget ferry. Group lines by `route_id`, or by
+`transport_mode` and `route_short_name` together, never by the name alone.
 
 Spark reads straight from HDFS over `hdfs://localhost:9000`, so the daemons
 have to be running, and nothing is copied back to the local disk. Spark 4 needs
