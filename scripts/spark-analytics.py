@@ -101,7 +101,8 @@ def stations(events, days):
 
 
 def hourly(events):
-    return with_all(events, "day_type").groupBy("day_type", "hour_of_day").agg(*delay_stats())
+    both = with_all(with_all(events, "day_type"), "transport_mode")
+    return both.groupBy("transport_mode", "day_type", "hour_of_day").agg(*delay_stats())
 
 
 def day_types(events):
@@ -150,7 +151,7 @@ def main():
     results = {
         "lines": lines(events, days).orderBy(F.asc_nulls_last("rank_avg_delay"), F.desc("stops")),
         "stations": stations(events, days).orderBy(F.asc_nulls_last("rank_late_pct"), "rank_busiest"),
-        "hourly": hourly(events).orderBy("day_type", "hour_of_day"),
+        "hourly": hourly(events).orderBy("transport_mode", "day_type", "hour_of_day"),
         "day_types": day_types(events).orderBy("transport_mode", "day_type"),
         "histogram": histogram(events).orderBy("transport_mode", "day_type", "delay_minute"),
         "daily": daily(events).orderBy("service_date"),
@@ -171,7 +172,8 @@ def main():
     tables["stations"].where("rank_busiest <= 10").orderBy("rank_busiest").select(
         "rank_busiest", "station_name", "modes", "lines", "stops_per_day", "late_pct").show(truncate=False)
     print("Delay by hour of day (scheduled, Stockholm time)")
-    tables["hourly"].groupBy("hour_of_day").pivot("day_type", ["weekday", "weekend", "all"]) \
+    tables["hourly"].where("transport_mode = 'all'") \
+        .groupBy("hour_of_day").pivot("day_type", ["weekday", "weekend", "all"]) \
         .agg(F.first("avg_delay_s")).orderBy("hour_of_day").show(24)
     print("Weekday vs weekend")
     tables["day_types"].orderBy("transport_mode", "day_type").select(

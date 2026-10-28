@@ -7,8 +7,13 @@ Two datasets are written:
 
 Trip updates contains the delays every 14 seconds. We decided to only keep the last
 entry as the ground truth of what happened to each train
+
+Usage:
+    python scripts/hdfs-ingression.py                 # everything already in data/decompressed
+    python scripts/hdfs-ingression.py --day-by-day    # straight from data/raw, one date at a time
 """
 
+import argparse
 import shutil
 import subprocess
 from multiprocessing import Pool
@@ -18,6 +23,8 @@ import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 from google.transit import gtfs_realtime_pb2
+
+import decompresser
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_FOLDER = ROOT / "data" / "decompressed" / "koda" / "static"
@@ -103,8 +110,9 @@ def convert_hour(folder):
             for stop in update.stop_time_update:
                 arrival_delay, arrival_time = event(stop.arrival)
                 departure_delay, departure_time = event(stop.departure)
-                # a later snapshot of the same stop replaces the earlier one
-                latest[(update.trip.trip_id, stop.stop_sequence)] = (
+                # a later snapshot of the same stop replaces the earlier one.
+                # trip ids are reused on other days, so the start date is part of the key
+                latest[(update.trip.trip_id, update.trip.start_date, stop.stop_sequence)] = (
                     update.trip.trip_id,
                     stop.stop_id,
                     stop.stop_sequence,
@@ -126,25 +134,71 @@ def convert_hour(folder):
     return f"{year}-{month}-{day} {hour}h: {len(latest)} rows"
 
 
-def main():
-    # get all the data from the static folder and put in parquet
-    for folder in sorted(STATIC_FOLDER.iterdir()):
-        convert_static(folder)
+def convert_trip_updates(day):
+    """One day of snapshots -> one Parquet file per hour, uploaded together."""
+    # get the date and hours for the trip updates folders
+    date = day.name.replace("sl-TripUpdates-", "")
+    hours = sorted(hour for hour in day.glob("sl/TripUpdates/*/*/*/*") if hour.is_dir())
+    with Pool(WORKERS) as pool:
+        for message in pool.imap(convert_hour, hours):
+            print(message)
+    upload(STAGING / "tripupdates" / f"date={date}", "/sl/tripupdates")
+    print(f"uploaded {date}")
 
-    for day in sorted(TRIP_UPDATES_FOLDER.iterdir()):
-        # get the date and hours for the trip updates folders
-        date = day.name.replace("sl-TripUpdates-", "")
-        hours = sorted(hour for hour in day.glob("sl/TripUpdates/*/*/*/*") if hour.is_dir())
-        with Pool(WORKERS) as pool:
-            for message in pool.imap(convert_hour, hours):
-                print(message)
-        upload(STAGING / "tripupdates" / f"date={date}", "/sl/tripupdates")
-        print(f"uploaded {date}")
+
+def day_by_day():
+    """
+    Decompress, ingest and delete one date at a time. A day of trip updates is
+    about 4.5 GB unpacked, so the whole month at once does not fit on a laptop.
+    Returns the archives that could not be decompressed.
+    """
+    jobs = [
+        (decompresser.STATIC_FOLDER, "GTFS-SL-", ".zip", decompresser.open_zip, convert_static),
+        (decompresser.TRIP_UPDATES_FOLDER, "sl-TripUpdates-", ".7z", decompresser.open_7z, convert_trip_updates),
+    ]
+    dates = sorted({archive.name.removeprefix(prefix).removesuffix(suffix)
+                    for folder, prefix, suffix, _, _ in jobs
+                    for archive in folder.glob(f"{prefix}*{suffix}")})
+    failed = []
+    for date in dates:
+        for folder, prefix, suffix, open_archive, convert in jobs:
+            archive = folder / f"{prefix}{date}{suffix}"
+            if not archive.exists():
+                continue
+            if not decompresser.extract(archive, open_archive):
+                failed.append(archive.name)
+                continue
+            unpacked = Path(str(folder).replace("raw", "decompressed")) / f"{prefix}{date}"
+            convert(unpacked)
+            shutil.rmtree(unpacked)
+    return failed
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--day-by-day", action="store_true",
+                        help="decompress, ingest and delete one date at a time, straight from data/raw")
+    args = parser.parse_args()
+
+    failed = []
+    if args.day_by_day:
+        failed = day_by_day()
+    else:
+        # get all the data from the static folder and put in parquet
+        for folder in sorted(STATIC_FOLDER.iterdir()):
+            convert_static(folder)
+        for day in sorted(TRIP_UPDATES_FOLDER.iterdir()):
+            convert_trip_updates(day)
 
     shutil.rmtree(STAGING, ignore_errors=True)  # only empty folders are left by now
 
     print("\nIn HDFS:")
     hdfs("-du", "-h", "/sl")
+
+    if failed:
+        print(f"\n{len(failed)} archive(s) could not be decompressed, re-run to retry:")
+        for name in failed:
+            print(f"  {name}")
 
 
 if __name__ == "__main__":

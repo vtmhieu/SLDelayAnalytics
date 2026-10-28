@@ -105,6 +105,11 @@ python scripts/decompresser.py
 This will create a new tree of data inside the *data* folder. It has the same structure as *step 3*, but instead
 of *raw*, it is *decompressed*.
 
+A day of trip updates is about 4.5 GB unpacked, so a month needs about 85 GB
+free. On a smaller disk skip this step and run step 5 as
+`python scripts/hdfs-ingression.py --day-by-day`, which unpacks, ingests and
+deletes one date at a time straight from `data/raw`.
+
 ### 5. Run the HDFS ingression script
 
 ```bash
@@ -127,6 +132,13 @@ python scripts/spark-analytics.py
 ```
 This answers the project questions from `/sl/stop_events` and writes small
 result tables to HDFS and to `data/analytics/*.csv`. See *Analytics with Spark* below.
+
+### 8. Open the dashboard
+
+```bash
+python scripts/dashboard.py
+```
+Then open <http://127.0.0.1:8050>. See *Dashboard* below.
 
 Notes:
 
@@ -407,7 +419,7 @@ for the dashboard. It also prints the main results.
 |---|---|---|
 | `lines` | line (`route_id`) | which lines have the highest average delay (`rank_avg_delay`) |
 | `stations` | station, with coordinates | which stations are most often late (`rank_late_pct`), which are busiest (`rank_busiest`), the map |
-| `hourly` | `day_type` (`weekday`, `weekend`, `all`) and hour | during which hours delays are worst |
+| `hourly` | transport mode (and `all`), `day_type` (`weekday`, `weekend`, `all`) and hour | during which hours delays are worst |
 | `day_types` | transport mode (and `all`) and `day_type` | how weekdays and weekends differ |
 | `histogram` | mode, `day_type` and one-minute delay bin | the delay distribution |
 | `daily` | service day | spotting days that stand out |
@@ -432,3 +444,27 @@ How to read the numbers:
   around Tungelsta.
 - **Night hours have few stops**, so their averages move a lot from day to day.
   Look at `stops` next to `avg_delay_s` in `hourly`.
+
+## Dashboard
+
+```bash
+python scripts/dashboard.py              # http://127.0.0.1:8050
+python scripts/dashboard.py --port 8060  # if 8050 is taken
+```
+
+A Plotly Dash page built from `data/analytics/*.csv`, so it runs without
+Spark or HDFS; rerun `spark-analytics.py` and restart it to see new data. One
+transport-mode filter at the top applies to every chart:
+
+- headline numbers: stops analysed, average delay, share of stops 3+ minutes
+  late, and how much worse the weekend is
+- average delay by scheduled hour, weekday against weekend
+- the lines with the highest average delay and the stations most often late
+- a map of stations, darker where more stops are late, bigger where more
+  vehicles stop (needs internet for the background map)
+- the delay distribution in one-minute bins, weekday against weekend
+- weekday against weekend per transport mode
+- the busiest stations as a table
+
+Weekday is always blue and weekend orange. Station names carry their modes in
+brackets, since one name can be several stations.

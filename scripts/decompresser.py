@@ -10,9 +10,6 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import py7zr
-from pyunpack import Archive
-import libarchive.public
-import lzma
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVICE_ALERTS_FOLDER = ROOT / "data" / "raw" / "koda" / "rt" / "ServiceAlerts"
